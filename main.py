@@ -6,8 +6,13 @@ Atau via cron / PM2 (lihat README).
 
 import logging
 import sys
+import os
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv  
+
+# Load environment variables from .env file 
+load_dotenv()
 
 # Setup logging
 LOG_DIR = Path("logs")
@@ -23,7 +28,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("main")
-
 
 def run():
     from src.collector import collect_all
@@ -68,7 +72,6 @@ def run():
         print(f"  {t['rank']}. {t['topic']}")
         print(f"     [{bar}] {score}/100  —  {t['hook']}")
         print()
-
 
 if __name__ == "__main__":
     run()
