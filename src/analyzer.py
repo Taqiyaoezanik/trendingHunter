@@ -60,16 +60,16 @@ def analyze_trends(raw_data: dict) -> dict:
         raise ValueError("OPENROUTER_API_KEY belum di-set di environment variable")
 
     # Kompres data agar tidak terlalu panjang
+    def slim(items, n):
+        return [{"title": i.get("title",""), "source": i.get("source","")} for i in items[:n]]
+
     compressed = {
-        "google_trends_top": raw_data.get("google_trends", [])[:15],
-        "reddit_top": [
-            {"title": r["title"], "source": r["source"]}
-            for r in raw_data.get("reddit", [])[:15]
-        ],
-        "youtube_top": [
-            {"title": r["title"], "channel": r.get("channel", "")}
-            for r in raw_data.get("youtube", [])[:10]
-        ],
+        "google_trends":   slim(raw_data.get("google_trends", []), 15),
+        "reddit":          slim(raw_data.get("reddit", []), 12),
+        "youtube":         slim(raw_data.get("youtube", []), 8),
+        "crypto_news":     slim(raw_data.get("crypto_news", []), 12),
+        "tech_news":       slim(raw_data.get("tech_news", []), 12),
+        "github_trending": slim(raw_data.get("github_trending", []), 10),
     }
 
     prompt = ANALYSIS_PROMPT.format(
