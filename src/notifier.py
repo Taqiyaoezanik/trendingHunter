@@ -1,6 +1,6 @@
 """
 Notifier — kirim laporan tren ke Telegram dan simpan ke JSON.
-Format pesan: konten siap posting gaya Oezank, bukan sekadar ide.
+Pakai parse_mode HTML agar karakter ………. tidak bikin error Markdown.
 """
 
 import json
@@ -20,11 +20,15 @@ MOMENTUM_EMOJI = {"hot": "🔥", "rising": "📈", "stable": "➡️"}
 NICHE_LABEL = {"tech_ai": "Tech / AI", "finance_crypto": "Finance / Crypto"}
 
 
-def format_telegram_message(analysis: dict) -> list:
+def escape_html(text: str) -> str:
+    """Escape karakter HTML yang bisa bikin error."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def format_telegram_messages(analysis: dict) -> list:
     """
-    Return list of messages — satu pesan per tren.
-    Telegram punya limit 4096 karakter per pesan,
-    jadi kita split per tren agar caption tidak kepotong.
+    Return list of messages — satu per tren.
+    Pakai HTML formatting, bukan Markdown, agar ………. tidak error.
     """
     now = datetime.now().strftime("%A, %d %b %Y · %H:%M WIB")
     trends = analysis.get("trends", [])
@@ -32,31 +36,34 @@ def format_telegram_message(analysis: dict) -> list:
     best_pick = analysis.get("best_pick", 1)
     messages = []
 
-    # Pesan pertama: header + summary
+    # Pesan 1: header
     header = (
-        f"*Trend Hunter — {now}*\n\n"
-        f"{summary}\n\n"
-        f"Ada *{len(trends)} konten siap posting* buat hari ini 👇"
+        f"<b>Trend Hunter — {now}</b>\n\n"
+        f"{escape_html(summary)}\n\n"
+        f"Ada <b>{len(trends)} konten siap posting</b> buat hari ini 👇"
     )
     messages.append(header)
 
-    # Satu pesan per tren — isi caption lengkap
+    # Satu pesan per tren
     for t in trends:
         rank = t.get("rank", 0)
         emoji = MOMENTUM_EMOJI.get(t.get("momentum", "stable"), "➡️")
-        star = " ⭐ *Best Pick*" if rank == best_pick else ""
+        star = " ⭐ <b>Best Pick</b>" if rank == best_pick else ""
         niche = NICHE_LABEL.get(t.get("niche", ""), t.get("niche", ""))
         score = t.get("virality_score", 0)
         formats = " · ".join(t.get("content_formats", []))
-        caption = t.get("caption", "").replace("……….", "\\.\\.\\.\\.\\.")
+        caption = escape_html(t.get("caption", ""))
+        why_now = escape_html(t.get("why_now", ""))
+        topic = escape_html(t.get("topic", ""))
+        sources = escape_html(", ".join(t.get("sources", [])))
 
         msg = (
-            f"{emoji} *Tren #{rank} — {t.get('topic', '')}*{star}\n"
-            f"_{niche}_ · Score: *{score}/100* · {formats}\n"
-            f"Kenapa sekarang: _{t.get('why_now', '')}_\n\n"
-            f"*— CAPTION SIAP POSTING —*\n\n"
-            f"{t.get('caption', '')}\n\n"
-            f"Sumber: {', '.join(t.get('sources', []))}"
+            f"{emoji} <b>Tren #{rank} — {topic}</b>{star}\n"
+            f"<i>{niche}</i> · Score: <b>{score}/100</b> · {formats}\n"
+            f"Kenapa sekarang: <i>{why_now}</i>\n\n"
+            f"— <b>CAPTION SIAP POSTING</b> —\n\n"
+            f"{caption}\n\n"
+            f"<i>Sumber: {sources}</i>"
         )
         messages.append(msg)
 
@@ -64,16 +71,16 @@ def format_telegram_message(analysis: dict) -> list:
 
 
 def send_telegram(message: str) -> bool:
-    """Kirim satu pesan ke Telegram."""
+    """Kirim satu pesan ke Telegram dengan HTML parse mode."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.warning("Telegram credentials belum di-set, skip notifikasi.")
+        logger.warning("Telegram credentials belum di-set, skip.")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "parse_mode": "Markdown",
+        "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
 
@@ -82,13 +89,20 @@ def send_telegram(message: str) -> bool:
         resp.raise_for_status()
         return True
     except Exception as e:
-        logger.error(f"Gagal kirim Telegram: {e}")
-        # Coba kirim tanpa markdown kalau format error
+        logger.error(f"Gagal kirim HTML: {e}")
+        # Fallback: kirim plain text
         try:
-            payload["parse_mode"] = None
-            payload["text"] = message.replace("*", "").replace("_", "")
-            resp = requests.post(url, json=payload, timeout=15)
-            resp.raise_for_status()
+            plain = message.replace("<b>", "").replace("</b>", "") \
+                           .replace("<i>", "").replace("</i>", "") \
+                           .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            payload2 = {
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": plain,
+                "disable_web_page_preview": True,
+            }
+            resp2 = requests.post(url, json=payload2, timeout=15)
+            resp2.raise_for_status()
+            logger.info("Terkirim sebagai plain text.")
             return True
         except Exception as e2:
             logger.error(f"Gagal kirim plain text juga: {e2}")
@@ -117,19 +131,16 @@ def save_json(raw_data: dict, analysis: dict) -> Path:
 def notify(raw_data: dict, analysis: dict) -> dict:
     """Entry point: simpan JSON + kirim semua pesan ke Telegram."""
     json_path = save_json(raw_data, analysis)
-
-    messages = format_telegram_message(analysis)
+    messages = format_telegram_messages(analysis)
     sent_count = 0
 
+    import time
     for i, msg in enumerate(messages):
         ok = send_telegram(msg)
         if ok:
             sent_count += 1
             logger.info(f"Pesan {i+1}/{len(messages)} terkirim")
-        import time
-        time.sleep(0.5)  # hindari rate limit Telegram
-
-    logger.info(f"Telegram: {sent_count}/{len(messages)} pesan terkirim")
+        time.sleep(0.5)
 
     return {
         "json_saved": str(json_path),
@@ -137,39 +148,3 @@ def notify(raw_data: dict, analysis: dict) -> dict:
         "messages_sent": sent_count,
         "messages_total": len(messages),
     }
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    dummy_analysis = {
-        "trends": [
-            {
-                "rank": 1,
-                "topic": "AI Coding Assistant Gratis dari Google",
-                "niche": "tech_ai",
-                "sources": ["TechCrunch", "HackerNews"],
-                "virality_score": 88,
-                "momentum": "hot",
-                "why_now": "Google baru rilis Gemini Code Assist gratis untuk semua developer.",
-                "caption": (
-                    "Google baru aja ngasih sesuatu yang bikin developer seneng……….\n\n"
-                    "Gemini Code Assist sekarang gratis buat semua orang. Bukan trial, bukan limited — gratis beneran.\n\n"
-                    "Gw udah coba sendiri. Kemampuan autocomplete nya lumayan, bisa ngerti konteks code yang panjang, "
-                    "dan yang paling berguna — bisa explain error langsung di dalam IDE.\n\n"
-                    "Tapi tetep ada catatannya:\n"
-                    "- Data code lu bisa dipakai Google buat training (baca privacy policy nya)\n"
-                    "- Untuk project sensitif atau company code, pikir dua kali dulu\n"
-                    "- Masih kalah di beberapa aspek dibanding GitHub Copilot yang berbayar\n\n"
-                    "Kalau lu developer atau lagi belajar coding, worth banget buat dicoba — gratis soalnya……….\n\n"
-                    "Udah ada yang nyoba? Drop di komen, lebih suka tools mana.\n"
-                    "Thanks dan babay"
-                ),
-                "content_formats": ["short_video", "carousel"],
-            }
-        ],
-        "summary": "Hari ini banyak noise dari dunia AI — yang paling worth dibahas buat audiens lu ada di bawah.",
-        "best_pick": 1,
-        "model_used": "deepseek/deepseek-chat",
-    }
-    result = notify({}, dummy_analysis)
-    print(result)
